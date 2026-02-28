@@ -30,6 +30,7 @@ from .image_patcher import show_image_patcher
 from .image_augmenter import show_image_augmenter
 from .slice_registration import SliceRegistrationTool
 from .sam_utils import SAMUtils
+from .dino_utils import DINOUtils
 from .snake_game import SnakeGame
 from .yolo_trainer import YOLOTrainer, TrainingInfoDialog, LoadPredictionModelDialog
 from .stack_interpolator import StackInterpolator
@@ -154,6 +155,11 @@ class ImageAnnotator(QMainWindow):
         # Initialize SAM utils
         self.current_sam_model = None
         self.sam_utils = SAMUtils()
+        # Initialize DINO utils
+        self.dino_utils = DINOUtils()
+        self.dino_threshold = 0.65
+        self.dino_last_bbox = None
+        self.dino_last_image_path = None
     
         # Create sam_magic_wand_button
         self.sam_magic_wand_button = QPushButton("Magic Wand")
@@ -895,7 +901,94 @@ class ImageAnnotator(QMainWindow):
             self.image_label.temp_sam_prediction = None
             self.image_label.update()
             print("SAM prediction accepted and added to annotations.")
-    
+
+    # --- DINO-Assisted methods ---
+
+    def on_dino_threshold_changed(self, value):
+        self.dino_threshold = value / 100.0
+        self.dino_threshold_label.setText(f"{self.dino_threshold:.2f}")
+
+    def activate_dino_assisted(self):
+        for button in self.tool_group.buttons():
+            if button != self.dino_button:
+                button.setChecked(False)
+
+        self.image_label.current_tool = "dino_assisted"
+        self.image_label.dino_active = True
+        self.image_label.setCursor(Qt.CrossCursor)
+
+        if self.image_label.sam_magic_wand_active:
+            self.deactivate_sam_magic_wand()
+
+        self.update_ui_for_current_tool()
+
+        if self.current_class is None and self.class_list.count() > 0:
+            self.class_list.setCurrentRow(0)
+            self.current_class = self.class_list.currentItem().text()
+        elif self.class_list.count() == 0:
+            QMessageBox.warning(self, "No Class Selected",
+                                "Please add a class before using annotation tools.")
+            self.dino_button.setChecked(False)
+            self.deactivate_dino_assisted()
+
+    def deactivate_dino_assisted(self):
+        self.image_label.current_tool = None
+        self.image_label.dino_active = False
+        self.dino_button.setChecked(False)
+        self.image_label.setCursor(Qt.ArrowCursor)
+        self.image_label.sam_bbox = None
+        self.image_label.drawing_sam_bbox = False
+        self.update_ui_for_current_tool()
+
+    def apply_dino_prediction(self):
+        """Called when user finishes drawing bbox while DINO tool is active."""
+        if self.image_label.sam_bbox is None:
+            return
+
+        x1, y1, x2, y2 = self.image_label.sam_bbox
+        bbox = [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
+
+        # Get image file path
+        image_path = self.image_paths.get(self.image_file_name)
+        if not image_path or not os.path.exists(image_path):
+            print("No valid image path for DINO feature extraction")
+            self.image_label.sam_bbox = None
+            return
+
+        # Store for threshold re-computation
+        self.dino_last_bbox = bbox
+        self.dino_last_image_path = image_path
+
+        self._run_dino_similarity(image_path, bbox)
+
+        self.image_label.sam_bbox = None
+        self.image_label.update()
+
+    def _run_dino_similarity(self, image_path, bbox):
+        """Run similarity search and populate temp_annotations."""
+        self.image_label.temp_annotations.clear()
+
+        polygons = self.dino_utils.find_similar_patches(
+            image_path, bbox, self.dino_threshold
+        )
+
+        for polygon in polygons:
+            temp_ann = {
+                "segmentation": polygon,
+                "category_id": self.class_mapping.get(self.current_class, 1),
+                "category_name": self.current_class,
+                "score": 1.0,
+                "temp": True,
+            }
+            self.image_label.temp_annotations.append(temp_ann)
+
+        self.image_label.update()
+
+    def on_dino_threshold_released(self):
+        """Recompute DINO predictions with new threshold on slider release."""
+        if self.dino_last_bbox and self.dino_last_image_path:
+            self._run_dino_similarity(self.dino_last_image_path, self.dino_last_bbox)
+
     def setup_slice_list(self):
         self.slice_list = QListWidget()
         self.slice_list.itemClicked.connect(self.switch_slice)
@@ -2202,7 +2295,31 @@ class ImageAnnotator(QMainWindow):
         sam_layout.addWidget(self.sam_model_selector)
     
         annotation_layout.addWidget(sam_widget)
-    
+
+        # DINO-Assisted tools subsection
+        dino_widget = QWidget()
+        dino_layout = QVBoxLayout(dino_widget)
+
+        self.dino_button = QPushButton("DINO-Assisted")
+        self.dino_button.setCheckable(True)
+        dino_layout.addWidget(self.dino_button)
+
+        threshold_layout = QHBoxLayout()
+        threshold_layout.addWidget(QLabel("Threshold:"))
+        self.dino_threshold_label = QLabel(f"{self.dino_threshold:.2f}")
+        threshold_layout.addWidget(self.dino_threshold_label)
+        dino_layout.addLayout(threshold_layout)
+
+        self.dino_threshold_slider = QSlider(Qt.Horizontal)
+        self.dino_threshold_slider.setMinimum(0)
+        self.dino_threshold_slider.setMaximum(100)
+        self.dino_threshold_slider.setValue(int(self.dino_threshold * 100))
+        self.dino_threshold_slider.valueChanged.connect(self.on_dino_threshold_changed)
+        self.dino_threshold_slider.sliderReleased.connect(self.on_dino_threshold_released)
+        dino_layout.addWidget(self.dino_threshold_slider)
+
+        annotation_layout.addWidget(dino_widget)
+
         # Setup tool group
         self.tool_group = QButtonGroup(self)
         self.tool_group.setExclusive(False)
@@ -2211,12 +2328,14 @@ class ImageAnnotator(QMainWindow):
         self.tool_group.addButton(self.paint_brush_button)
         self.tool_group.addButton(self.eraser_button)
         self.tool_group.addButton(self.sam_magic_wand_button)
-    
+        self.tool_group.addButton(self.dino_button)
+
         self.polygon_button.clicked.connect(self.toggle_tool)
         self.rectangle_button.clicked.connect(self.toggle_tool)
         self.paint_brush_button.clicked.connect(self.toggle_tool)
         self.eraser_button.clicked.connect(self.toggle_tool)
         self.sam_magic_wand_button.clicked.connect(self.toggle_tool)
+        self.dino_button.clicked.connect(self.toggle_tool)
     
         # Annotations list subsection
         annotation_layout.addWidget(QLabel("Annotations"))
@@ -3354,6 +3473,9 @@ class ImageAnnotator(QMainWindow):
         # Deactivate SAM if we're switching to a different tool
         if sender != self.sam_magic_wand_button and self.image_label.sam_magic_wand_active:
             self.deactivate_sam_magic_wand()
+        # Deactivate DINO if we're switching to a different tool
+        if sender != self.dino_button and self.image_label.dino_active:
+            self.deactivate_dino_assisted()
     
         if sender.isChecked():
             # Uncheck all other buttons
@@ -3374,10 +3496,15 @@ class ImageAnnotator(QMainWindow):
             elif sender == self.eraser_button:
                 self.image_label.current_tool = "eraser"
                 self.image_label.setFocus()  # Set focus on the image label
+            elif sender == self.dino_button:
+                self.image_label.current_tool = "dino_assisted"
+                self.activate_dino_assisted()
         else:
             self.image_label.current_tool = None
             if sender == self.sam_magic_wand_button:
                 self.deactivate_sam_magic_wand()
+            if sender == self.dino_button:
+                self.deactivate_dino_assisted()
     
         # Update UI based on the current tool
         self.update_ui_for_current_tool()
@@ -3416,8 +3543,10 @@ class ImageAnnotator(QMainWindow):
         # Update cursor based on the current tool
         if self.image_label.current_tool == "sam_magic_wand" and self.sam_magic_wand_button.isEnabled():
             self.image_label.setCursor(Qt.CrossCursor)
+        elif self.image_label.current_tool == "dino_assisted":
+            self.image_label.setCursor(Qt.CrossCursor)
         else:
-            self.image_label.setCursor(Qt.ArrowCursor) 
+            self.image_label.setCursor(Qt.ArrowCursor)
 
     def on_class_selected(self, current=None, previous=None):
         if not self.image_label.check_unsaved_changes():

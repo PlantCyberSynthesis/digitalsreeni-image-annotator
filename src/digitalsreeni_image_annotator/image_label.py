@@ -72,7 +72,10 @@ class ImageLabel(QLabel):
         self.sam_bbox = None
         self.drawing_sam_bbox = False
         self.temp_sam_prediction = None
-        
+
+        # DINO
+        self.dino_active = False
+
         self.temp_annotations = []
 
 
@@ -288,7 +291,7 @@ class ImageLabel(QLabel):
             if self.drawing_rectangle and self.current_rectangle:
                 self.draw_current_rectangle(painter)
             
-            if self.sam_magic_wand_active and self.sam_bbox:
+            if (self.sam_magic_wand_active or self.dino_active) and self.sam_bbox:
                 self.draw_sam_bbox(painter)
             
             # Draw temporary paint mask
@@ -687,7 +690,7 @@ class ImageLabel(QLabel):
         else:
             pos = self.get_image_coordinates(event.pos())
             if event.button() == Qt.LeftButton:
-                if self.sam_magic_wand_active:
+                if self.sam_magic_wand_active or self.dino_active:
                     self.sam_bbox = [pos[0], pos[1], pos[0], pos[1]]
                     self.drawing_sam_bbox = True
                 elif self.editing_polygon:
@@ -724,7 +727,7 @@ class ImageLabel(QLabel):
             event.accept()
         else:
             pos = self.cursor_pos
-            if self.sam_magic_wand_active and self.drawing_sam_bbox:
+            if (self.sam_magic_wand_active or self.dino_active) and self.drawing_sam_bbox:
                 if self.sam_bbox is not None:
                     self.sam_bbox[2] = pos[0]
                     self.sam_bbox[3] = pos[1]
@@ -751,12 +754,15 @@ class ImageLabel(QLabel):
         else:
             pos = self.get_image_coordinates(event.pos())
             if event.button() == Qt.LeftButton:
-                if self.sam_magic_wand_active and self.drawing_sam_bbox:
+                if (self.sam_magic_wand_active or self.dino_active) and self.drawing_sam_bbox:
                     if self.sam_bbox is not None:
                         self.sam_bbox[2] = pos[0]
                         self.sam_bbox[3] = pos[1]
                         self.drawing_sam_bbox = False
-                        self.main_window.apply_sam_prediction()
+                        if self.dino_active:
+                            self.main_window.apply_dino_prediction()
+                        else:
+                            self.main_window.apply_sam_prediction()
                 elif self.editing_polygon:
                     self.editing_point_index = None
                 elif self.current_tool == "rectangle" and self.drawing_rectangle:
