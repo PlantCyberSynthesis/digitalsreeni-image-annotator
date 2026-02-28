@@ -148,7 +148,7 @@ class ImageAnnotator(QMainWindow):
         self.image_slices = {}
         self.image_shapes = {}
         
-        #For paint brush and eraser
+        # For paint brush and eraser
         self.paint_brush_size = 10
         self.eraser_size = 10
         # Initialize SAM utils
@@ -165,13 +165,13 @@ class ImageAnnotator(QMainWindow):
         self.tool_group.setExclusive(False)
     
         # Font size control
-        self.font_sizes = {"Small": 8, "Medium": 10, "Large": 12, "XL": 14, "XXL": 16}   #Also, add the otions in create_menu_bar method
+        self.font_sizes = {"Small": 8, "Medium": 10, "Large": 12, "XL": 14, "XXL": 16}   # Also, add the options in create_menu_bar method
         self.current_font_size = "Medium"
     
         # Dark mode control
         self.dark_mode = False
         
-        #Default annotations sorting
+        # Default annotations sorting
         self.current_sort_method = "class"  # Default sorting method
     
         # Setup UI components
@@ -185,9 +185,12 @@ class ImageAnnotator(QMainWindow):
         
         self.class_list.itemChanged.connect(self.toggle_class_visibility)
         
-        #YOLO Trainer
+        # YOLO Trainer
         self.yolo_trainer = None
         self.setup_yolo_menu()
+        
+        # Start in maximized mode
+        self.showMaximized()
 
 
     def setup_ui(self):
@@ -1078,14 +1081,14 @@ class ImageAnnotator(QMainWindow):
             # If the user chooses not to discard temp annotations, revert the selection
             self.image_list.setCurrentItem(current_item)
             return
-    
+
         self.save_current_annotations()
         self.image_label.clear_temp_sam_prediction()
         self.image_label.exit_editing_mode()
-    
+
         file_name = item.text()
         print(f"\nSwitching to image: {file_name}")
-    
+
         image_info = next((img for img in self.all_images if img["file_name"] == file_name), None)
         
         if image_info:
@@ -1094,7 +1097,7 @@ class ImageAnnotator(QMainWindow):
             
             if not image_path:
                 image_path = os.path.join(self.current_project_dir, "images", file_name)
-    
+
             if image_path and os.path.exists(image_path):
                 if image_info.get('is_multi_slice', False):
                     base_name = os.path.splitext(file_name)[0]
@@ -1121,6 +1124,8 @@ class ImageAnnotator(QMainWindow):
                 self.image_label.reset_annotation_state()
                 self.image_label.clear_current_annotation()
                 self.update_image_info()
+
+                self.adjust_zoom_to_fit()
             else:
                 self.current_image = None
                 self.image_label.clear()
@@ -1129,7 +1134,6 @@ class ImageAnnotator(QMainWindow):
                 self.update_image_info()
             
             self.image_list.setCurrentItem(item)
-            self.set_zoom(1.0)
             self.image_label.update()
             self.update_slice_list_colors()
         else:
@@ -1138,6 +1142,20 @@ class ImageAnnotator(QMainWindow):
             self.image_label.clear()
             self.update_image_info()
             self.clear_slice_list()
+
+    def adjust_zoom_to_fit(self):
+        if not self.current_image:
+            return
+
+        # Get the dimensions of the image and the display area
+        image_width = self.current_image.width()
+        image_height = self.current_image.height()
+        display_width = self.scroll_area.viewport().width()
+        display_height = self.scroll_area.viewport().height()
+
+        # Calculate and apply the zoom factor to fit the longest side
+        zoom_factor = min(display_width / image_width, display_height / image_height)
+        self.set_zoom(zoom_factor)
         
             
     def activate_current_slice(self):
@@ -2120,7 +2138,22 @@ class ImageAnnotator(QMainWindow):
         self.class_list.customContextMenuRequested.connect(self.show_class_context_menu)
         self.class_list.itemClicked.connect(self.on_class_selected)
         self.sidebar_layout.addWidget(self.class_list)
-        
+
+
+        button_layout_class_list = QHBoxLayout()
+        self.clrButton =QPushButton(self.class_list)
+        self.clrButton.setText("clear all")
+        self.clrButton.setEnabled(False)
+        self.allButton = QPushButton(self.class_list)
+        self.allButton.setText("select all")
+        self.allButton.setEnabled(False)
+        button_layout_class_list.addWidget(self.clrButton)
+        button_layout_class_list.addWidget(self.allButton)
+        self.clrButton.clicked.connect(lambda : self.toggle_all_class(Qt.Unchecked))
+        self.allButton.clicked.connect(lambda : self.toggle_all_class(Qt.Checked))
+        self.sidebar_layout.addLayout(button_layout_class_list)
+
+      
         # Annotation section
         self.sidebar_layout.addWidget(create_section_header("Annotation"))
         annotation_widget = QWidget()
@@ -2415,6 +2448,7 @@ class ImageAnnotator(QMainWindow):
 
         self.image_list = QListWidget()
         self.image_list.itemClicked.connect(self.switch_image)
+        self.image_list.currentRowChanged.connect(lambda row: self.switch_image(self.image_list.currentItem()))
         self.image_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.image_list.customContextMenuRequested.connect(self.show_image_context_menu)
         self.image_list_layout.addWidget(self.image_list)
@@ -2511,6 +2545,9 @@ class ImageAnnotator(QMainWindow):
     
         # Reset class-related data
         self.class_list.clear()
+        self.allButton.setEnabled(False)
+        self.clrButton.setEnabled(False)
+        
         self.image_label.class_colors.clear()
         self.class_mapping.clear()
     
@@ -2833,7 +2870,9 @@ class ImageAnnotator(QMainWindow):
             self.update_annotation_list()  # This will repopulate the annotation list
             self.image_label.update()  # Force a redraw of the image label
 
-
+            if self.class_list.count() > 0:
+                self.allButton.setEnabled(True)
+                self.clrButton.setEnabled(True)
 
 
     def clear_highlighted_annotation(self):
@@ -3160,7 +3199,9 @@ class ImageAnnotator(QMainWindow):
             import traceback
             traceback.print_exc()
 
-
+        if self.class_list.count() > 0:
+            self.allButton.setEnabled(True)
+            self.clrButton.setEnabled(True)
     
     def update_class_item_color(self, item, color):
         pixmap = QPixmap(16, 16)
@@ -3197,7 +3238,11 @@ class ImageAnnotator(QMainWindow):
         elif self.class_list.count() > 0:
             # If no class is selected, select the first one
             self.class_list.setCurrentItem(self.class_list.item(0))
-    
+
+        if self.class_list.count() > 0:
+            self.allButton.setEnabled(True)
+            self.clrButton.setEnabled(True)
+          
         print(f"Updated class list with {self.class_list.count()} items")
         
     def update_class_selection(self):
@@ -3216,6 +3261,13 @@ class ImageAnnotator(QMainWindow):
         item.setData(Qt.UserRole, is_visible)
         self.image_label.update()
     
+
+    def toggle_all_class(self, checked):
+        for i in range(self.class_list.count()):
+            item = self.class_list.item(i)
+            item.setCheckState(checked)
+        # Update image annotations
+        self.image_label.update()
     
         
     def change_annotation_class(self):
@@ -3546,8 +3598,35 @@ class ImageAnnotator(QMainWindow):
                 QMessageBox.warning(self, "No Class Selected", "Please select a class before finishing the annotation.")
                 return
             
+            # Create a polygon from the current annotation
+            polygon = Polygon(self.image_label.current_annotation)
+            
+            # Define the image boundary as a rectangle
+            image_boundary = Polygon([(0, 0), (self.current_image.width(), 0), 
+                                       (self.current_image.width(), self.current_image.height()), 
+                                       (0, self.current_image.height())])
+            
+            # Intersect the polygon with the image boundary
+            clipped_polygon = polygon.intersection(image_boundary)
+            
+            if clipped_polygon.is_empty:
+                QMessageBox.warning(self, "Invalid Annotation", "The annotation is completely outside the image boundaries.")
+                self.image_label.clear_current_annotation()
+                self.image_label.update()
+                return
+            
+            # Convert the clipped polygon to a segmentation format
+            if isinstance(clipped_polygon, Polygon):
+                segmentation = [coord for point in clipped_polygon.exterior.coords for coord in point]
+            elif isinstance(clipped_polygon, MultiPolygon):
+                largest_polygon = max(clipped_polygon.geoms, key=lambda p: p.area)
+                segmentation = [coord for point in largest_polygon.exterior.coords for coord in point]
+            else:
+                QMessageBox.warning(self, "Invalid Annotation", "The annotation could not be processed.")
+                return
+            
             new_annotation = {
-                "segmentation": [coord for point in self.image_label.current_annotation for coord in point],
+                "segmentation": segmentation,
                 "category_id": self.class_mapping[self.current_class],
                 "category_name": self.current_class,
             }
@@ -3632,8 +3711,36 @@ class ImageAnnotator(QMainWindow):
     def finish_rectangle(self):
         if self.image_label.current_rectangle:
             x1, y1, x2, y2 = self.image_label.current_rectangle
+            
+            # Create a rectangle polygon from the annotation
+            rectangle = Polygon([(x1, y1), (x2, y1), (x2, y2), (x1, y2)])
+            
+            # Define the image boundary as a rectangle
+            image_boundary = Polygon([(0, 0), (self.current_image.width(), 0), 
+                                       (self.current_image.width(), self.current_image.height()), 
+                                       (0, self.current_image.height())])
+            
+            # Intersect the rectangle with the image boundary
+            clipped_rectangle = rectangle.intersection(image_boundary)
+            
+            if clipped_rectangle.is_empty:
+                QMessageBox.warning(self, "Invalid Annotation", "The annotation is completely outside the image boundaries.")
+                self.image_label.current_rectangle = None
+                self.image_label.update()
+                return
+            
+            # Convert the clipped rectangle to a segmentation format
+            if isinstance(clipped_rectangle, Polygon):
+                segmentation = [coord for point in clipped_rectangle.exterior.coords for coord in point]
+            elif isinstance(clipped_rectangle, MultiPolygon):
+                largest_polygon = max(clipped_rectangle.geoms, key=lambda p: p.area)
+                segmentation = [coord for point in largest_polygon.exterior.coords for coord in point]
+            else:
+                QMessageBox.warning(self, "Invalid Annotation", "The annotation could not be processed.")
+                return
+            
             new_annotation = {
-                "segmentation": [x1, y1, x2, y1, x2, y2, x1, y2],
+                "segmentation": segmentation,
                 "category_id": self.class_mapping[self.current_class],
                 "category_name": self.current_class,
             }
